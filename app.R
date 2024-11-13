@@ -9,81 +9,65 @@ base_url <- "https://grandreserva.unfccc.int/applications/grandreserva/public/sc
 
 # Read the main page to extract the date options
 main_page <- read_html("https://grandreserva.unfccc.int/grandreserva/public/schedule")
-
-# Extract the select element's options for dates
 date_options <- main_page %>%
   html_nodes("select option") %>%
   html_text()
 
-# Convert date_options to a format compatible with URL parameters, e.g., "2024/11/11"
+# Convert date_options to a format compatible with URL parameters
 date_params <- lapply(date_options, function(date_text) {
   as.character(format(as.Date(date_text, format = "%d-%b-%Y, %a"), "%Y/%m/%d"))
 })
 
-# Format today's date to match the format in date_options, e.g., "24-Oct-2024, Thu"
+# Today's date
 today_date <- format(Sys.Date(), "%d-%b-%Y, %a")
-
-# Check if today's date is in the options; if not, default to the first date in the list
 selected_date <- ifelse(today_date %in% date_options, today_date, date_options[1])
 
-# Function to scrape data for a given date parameter
+# Function to scrape data
 scrape_data <- function(date_param, date_text) {
-  # Construct the URL with the date parameter
   url <- paste0(base_url, "?time=", date_param, "&conference_id=93&meeting_type=&body=&webcast=0")
-  
-  # Read the HTML content of the page for this specific date
   page <- read_html(url)
   
-  # Scrape the table or event details
   events_data <- page %>%
     html_nodes("table") %>%
     html_table(fill = TRUE)
   
-  # Convert the data to a data frame if it exists
   if (length(events_data) > 0) {
     events_df <- events_data[[1]]
-    events_df <- events_df %>% mutate(Date = date_text)  # Add the date column for reference
+    events_df <- events_df %>% mutate(Date = date_text)
     return(events_df)
   } else {
-    return(NULL)  # Return NULL if no table was found
+    return(NULL)
   }
 }
 
-# Shiny UI and Server
+# UI and server
 ui <- fluidPage(
   titlePanel("UNFCCC COP29 Baku Event Schedule"),
   
   sidebarLayout(
     sidebarPanel(
-      # "Go to Today" button
       actionButton("goToToday", "Go to Today's Date"),
-      
-      # Dropdown for date selection based on scraped date options
-      selectInput("selectedDate", "Select Date:",
-                  choices = date_options,
-                  selected = selected_date),  # Default to today's date
-      
-      # Action button to manually refresh the data
+      selectInput("selectedDate", "Select Date:", choices = date_options, selected = selected_date),
       actionButton("refreshData", "Update Page"),
-      
-      # Vertical space below the "Update Page" button
       tags$br(), tags$br(),
-      
-      # "Select All" and "Deselect All" buttons for event types
       actionButton("selectAll", "Select All"),
       actionButton("deselectAll", "Deselect All"),
-      
-      # Vertical space 
-      tags$br(), 
-      
-      # Checkbox group input for selecting event types
+      tags$br(),
       checkboxGroupInput("eventType", "Select Event Types:",
-                         choices = c("Official Meeting", "Mandated Event", 
-                                     "Coordination Meeting", "Side Event", 
-                                     "Press Conference", "Uncertain"),
-                         selected = c("Official Meeting", "Mandated Event", 
-                                      "Coordination Meeting", "Side Event", 
-                                      "Press Conference", "Uncertain"))
+                         choices = c("Official Meeting", "Mandated Event", "Constituted Body Event", 
+                                     "Coordination Meeting", 
+                                     "Side Event", "Press Conference", "Uncertain"),
+                         selected = c("Official Meeting", "Mandated Event", "Constituted Body Event",
+                                      "Coordination Meeting", 
+                                      "Side Event", "Press Conference", "Uncertain")),
+      
+      # Set default choices for Event Topic
+      radioButtons("selectedTopic", 'Select Event Topic\n(only for Official Meetings - select  "All" to display all others):',
+                   choices = c("All", "Finance", "Loss and Damage", "Mitigation", "Adaptation", 
+                               "GST", "Art. 6", "Transparency", "Capacity Building", "Technology", 
+                               "Just Transition", "Science", "AFOLU", "Gender", "Compliance", 
+                               "Bunkers", "Other/Uncertain"), 
+                   selected = "All")
     ),
     mainPanel(
       DTOutput("filteredEvents")
@@ -94,7 +78,7 @@ ui <- fluidPage(
   tags$footer(
     tags$hr(),
     tags$p(
-      "App created by ", tags$a(href = "https://moritzschwarz.org", "Moritz Schwarz."),"Report any bugs to ", 
+      "App created by ",tags$a(href = "https://moritzschwarz.org","Moritz Schwarz."), " Report any bugs to ", 
       tags$a(href = "https://github.com/moritzpschwarz/UNFCCC_schedule/issues", "GitHub."),
       style = "text-align: center; color: #888; font-size: 0.9em;"
     )
@@ -102,74 +86,136 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
-  # Reactive value to store the scraped data for the selected date
   events_data <- reactiveVal()
+  initial_load <- reactiveVal(TRUE)  # Track if initial load is completed
   
-  # Function to load data based on the selected date
   load_data <- function(date_text) {
     date_param <- as.character(format(as.Date(date_text, format = "%d-%b-%Y, %a"), "%Y/%m/%d"))
     data <- scrape_data(date_param, date_text)
     
     if (!is.null(data)) {
-      # Categorize the data
       data <- data %>%
         mutate(EventType = case_when(
           grepl("Coordination|Preparatory|G77 & China", Room, ignore.case = TRUE) ~ "Coordination Meeting",
-          grepl("Coordination|Preparatory|G77 & China|Coalition for Rainforest Nations", Title, ignore.case = TRUE) ~ "Coordination Meeting",
+          grepl("Coordination|Preparatory|G77 & China|Coalition for Rainforest Nations|GRULAC Meeting", Title, ignore.case = TRUE) ~ "Coordination Meeting",
           grepl("Mandated", Title, ignore.case = TRUE) ~ "Mandated Event",
+          grepl("Constituted Body|Facilitative Working Group", Title, ignore.case = TRUE) ~ "Constituted Body Event",
           grepl("Meeting Room|Plenary", Room, ignore.case = TRUE) ~ "Official Meeting",
           grepl("Side Event|Special Event", Room, ignore.case = TRUE) ~ "Side Event",
           grepl("Press Conference", Room, ignore.case = TRUE) ~ "Press Conference",
-          TRUE ~ "Uncertain"  # If it doesn't match any specific category, mark as "Uncertain"
+          TRUE ~ "Uncertain"
         )) %>%
-        mutate(EventType = factor(EventType, levels = c("Official Meeting", "Mandated Event", 
-                                                        "Coordination Meeting", "Side Event", 
-                                                        "Press Conference", "Uncertain")))
+        mutate(Topic = case_when(
+          EventType == "Official Meeting" & grepl("finance|Article 9|FRLD|GCF|GEF|NCQG|Adaptation Fund|Provision of financial and technical support|Green Climate Fund|Global Environment Facility", Title, ignore.case = TRUE) ~ "Finance",
+          EventType == "Official Meeting" & grepl("just transition", Title, ignore.case = TRUE) ~ "Just Transition",
+          EventType == "Official Meeting" & grepl("loss and damage|LnD", Title, ignore.case = TRUE) ~ "Loss and Damage",
+          EventType == "Official Meeting" & grepl("adaptation", Title, ignore.case = TRUE) ~ "Adaptation",
+          EventType == "Official Meeting" & grepl("mitigation", Title, ignore.case = TRUE) ~ "Mitigation",
+          EventType == "Official Meeting" & grepl("transparency|Reporting from |Technical review", Title, ignore.case = TRUE) ~ "Transparency",
+          EventType == "Official Meeting" & grepl("capacity building|capacity-building", Title, ignore.case = TRUE) ~ "Capacity Building",
+          EventType == "Official Meeting" & grepl("technology", Title, ignore.case = TRUE) ~ "Technology",
+          EventType == "Official Meeting" & grepl("science|research", Title, ignore.case = TRUE) ~ "Science",
+          EventType == "Official Meeting" & grepl("Article 6|Clean Development Mechanism", Title, ignore.case = TRUE) ~ "Art. 6",
+          EventType == "Official Meeting" & grepl("agriculture", Title, ignore.case = TRUE) ~ "AFOLU",
+          EventType == "Official Meeting" & grepl("gender", Title, ignore.case = TRUE) ~ "Gender",
+          EventType == "Official Meeting" & grepl("compliance|Article 15", Title, ignore.case = TRUE) ~ "Compliance",
+          EventType == "Official Meeting" & grepl("United Arab Emirates dialogue|global stocktake", Title, ignore.case = TRUE) ~ "GST",
+          EventType == "Official Meeting" & grepl("international aviation and maritime transport", Title, ignore.case = TRUE) ~ "Bunkers",
+          EventType == "Official Meeting" ~ "Other/Uncertain",
+          TRUE ~ NA
+        ))
+      
+      # Define preferred order for topics
+      preferred_order <- c("Finance",  "Mitigation", "Adaptation", "Loss and Damage",
+                           "GST", "Art. 6", "Transparency", "Capacity Building", 
+                           "Technology", "Just Transition", "Science", "AFOLU", 
+                           "Gender", "Compliance", "Bunkers", "Other/Uncertain")
+      
+      # Dynamically update Topic choices based on loaded data
+      unique_topics <- unique(data$Topic)
+      
+      # Separate topics that match the preferred order and those that don’t
+      ordered_topics <- preferred_order[preferred_order %in% unique_topics]
+      remaining_topics <- sort(setdiff(unique_topics, preferred_order))
+      
+      # Combine preferred order, remaining topics, and "Other/Uncertain"
+      final_topics <- c("All", ordered_topics, remaining_topics)
+      
+      # Update the radio buttons with the final ordered topics
+      updateRadioButtons(session, "selectedTopic", choices = final_topics, selected = "All")
     }
     
     events_data(data)
   }
   
-  # Initial load for today's date
+  # Load initial data
   load_data(selected_date)
   
-  # Observe the "Go to Today" button click to reset the date to today and load data
-  observeEvent(input$goToToday, {
-    updateSelectInput(session, "selectedDate", selected = selected_date)
-    load_data(selected_date)
+  # Apply query parameters on app load (only once)
+  observe({
+    if (initial_load()) {
+      query <- parseQueryString(session$clientData$url_search)
+      
+      if (!is.null(query$date)) {
+        date_text <- ifelse(query$date == "today", today_date, query$date)
+        updateSelectInput(session, "selectedDate", selected = date_text)
+        load_data(date_text)
+      }
+      
+      if (!is.null(query$eventType)) {
+        event_types <- unlist(strsplit(query$eventType, ","))
+        updateCheckboxGroupInput(session, "eventType", selected = event_types)
+      }
+      
+      if (!is.null(query$topic)) {
+        updateRadioButtons(session, "selectedTopic", selected = query$topic)
+      }
+      
+      initial_load(FALSE)  # Mark initial load as completed
+    }
   })
   
-  # Observe changes in the selected date or when the "Update Page" button is clicked
-  observeEvent(list(input$selectedDate, input$refreshData), {
-    load_data(input$selectedDate)
+  # Update URL query string based on inputs
+  observe({
+    new_query <- paste0(
+      "?date=", ifelse(input$selectedDate == today_date, "today", input$selectedDate),
+      "&eventType=", paste(input$eventType, collapse = ","),
+      "&topic=", input$selectedTopic
+    )
+    updateQueryString(new_query, mode = "push")
   })
   
-  # Observe "Select All" button to check all event types
+  # Select and Deselect All event types
   observeEvent(input$selectAll, {
-    updateCheckboxGroupInput(session, "eventType",
-                             selected = c("Official Meeting", "Mandated Event", 
-                                          "Coordination Meeting", "Side Event", 
-                                          "Press Conference", "Uncertain"))
+    updateCheckboxGroupInput(session, "eventType", selected = c("Official Meeting", "Mandated Event", "Constituted Body Event","Coordination Meeting", "Side Event", "Press Conference", "Uncertain"))
   })
   
-  # Observe "Deselect All" button to uncheck all event types
   observeEvent(input$deselectAll, {
     updateCheckboxGroupInput(session, "eventType", selected = character(0))
   })
   
-  # Render the filtered table based on the selected event types
+  # Go to today's date
+  observeEvent(input$goToToday, {
+    updateSelectInput(session, "selectedDate", selected = today_date)
+    load_data(today_date)
+  })
+  
   output$filteredEvents <- renderDT({
-    req(events_data())  # Ensure data is available
-    events_data() %>%
-      filter(EventType %in% input$eventType) %>%
-      select(-Date) %>% 
-      rename(`Event Type` = EventType) %>% 
-      datatable(filter = "top", 
-                rownames = FALSE,
-                options = list(pageLength = nrow(.), paging = FALSE), 
-                selection = "single")
+    req(events_data())
+    
+    filtered_data <- events_data() %>%
+      filter(EventType %in% input$eventType)
+    
+    if (input$selectedTopic != "All") {
+      filtered_data <- filtered_data %>% filter(Topic == input$selectedTopic)
+    }
+    
+    filtered_data %>%
+      select(-Date) %>%
+      rename(`Event Type` = EventType) %>%
+      datatable(filter = "top", rownames = FALSE,
+                options = list(pageLength = nrow(.), paging = FALSE), selection = "single")
   })
 }
 
-# Run the app
 shinyApp(ui = ui, server = server)
