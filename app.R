@@ -89,6 +89,7 @@ server <- function(input, output, session) {
   events_data <- reactiveVal()
   initial_load <- reactiveVal(TRUE)  # Track if initial load is completed
   
+  # Function to load data based on the selected date
   load_data <- function(date_text) {
     date_param <- as.character(format(as.Date(date_text, format = "%d-%b-%Y, %a"), "%Y/%m/%d"))
     data <- scrape_data(date_param, date_text)
@@ -97,7 +98,7 @@ server <- function(input, output, session) {
       data <- data %>%
         mutate(EventType = case_when(
           grepl("Coordination|Preparatory|G77 & China", Room, ignore.case = TRUE) ~ "Coordination Meeting",
-          grepl("Coordination|Preparatory|G77 & China|Coalition for Rainforest Nations|GRULAC Meeting", Title, ignore.case = TRUE) ~ "Coordination Meeting",
+          grepl("Coordination|Preparatory|G77 & China|Coalition for Rainforest Nations|GRULAC", Title, ignore.case = TRUE) ~ "Coordination Meeting",
           grepl("Mandated", Title, ignore.case = TRUE) ~ "Mandated Event",
           grepl("Constituted Body|Facilitative Working Group", Title, ignore.case = TRUE) ~ "Constituted Body Event",
           grepl("Meeting Room|Plenary", Room, ignore.case = TRUE) ~ "Official Meeting",
@@ -109,39 +110,36 @@ server <- function(input, output, session) {
           EventType == "Official Meeting" & grepl("finance|Article 9|FRLD|GCF|GEF|NCQG|Adaptation Fund|Provision of financial and technical support|Green Climate Fund|Global Environment Facility", Title, ignore.case = TRUE) ~ "Finance",
           EventType == "Official Meeting" & grepl("just transition", Title, ignore.case = TRUE) ~ "Just Transition",
           EventType == "Official Meeting" & grepl("loss and damage|LnD", Title, ignore.case = TRUE) ~ "Loss and Damage",
-          EventType == "Official Meeting" & grepl("adaptation", Title, ignore.case = TRUE) ~ "Adaptation",
+          EventType == "Official Meeting" & grepl("adaptation|matters relating to the least developed countries", Title, ignore.case = TRUE) ~ "Adaptation",
           EventType == "Official Meeting" & grepl("mitigation", Title, ignore.case = TRUE) ~ "Mitigation",
           EventType == "Official Meeting" & grepl("transparency|Reporting from |Technical review", Title, ignore.case = TRUE) ~ "Transparency",
           EventType == "Official Meeting" & grepl("capacity building|capacity-building", Title, ignore.case = TRUE) ~ "Capacity Building",
           EventType == "Official Meeting" & grepl("technology", Title, ignore.case = TRUE) ~ "Technology",
-          EventType == "Official Meeting" & grepl("science|research", Title, ignore.case = TRUE) ~ "Science",
+          EventType == "Official Meeting" & grepl("science|research|Consultative Group of Experts|Greenhouse gas data interface", Title, ignore.case = TRUE) ~ "Science",
           EventType == "Official Meeting" & grepl("Article 6|Clean Development Mechanism", Title, ignore.case = TRUE) ~ "Art. 6",
           EventType == "Official Meeting" & grepl("agriculture", Title, ignore.case = TRUE) ~ "AFOLU",
           EventType == "Official Meeting" & grepl("gender", Title, ignore.case = TRUE) ~ "Gender",
           EventType == "Official Meeting" & grepl("compliance|Article 15", Title, ignore.case = TRUE) ~ "Compliance",
           EventType == "Official Meeting" & grepl("United Arab Emirates dialogue|global stocktake", Title, ignore.case = TRUE) ~ "GST",
-          EventType == "Official Meeting" & grepl("international aviation and maritime transport", Title, ignore.case = TRUE) ~ "Bunkers",
+          EventType == "Official Meeting" & grepl("international aviation and maritime transport|bunker", Title, ignore.case = TRUE) ~ "Bunkers",
+          EventType == "Official Meeting" & grepl("Response measures", Title, ignore.case = TRUE) ~ "RM",
+          EventType == "Official Meeting" & grepl("Action for Climate Empowerment", Title, ignore.case = TRUE) ~ "ACE",
           EventType == "Official Meeting" ~ "Other/Uncertain",
           TRUE ~ NA
         ))
       
-      # Define preferred order for topics
-      preferred_order <- c("Finance",  "Mitigation", "Adaptation", "Loss and Damage",
-                           "GST", "Art. 6", "Transparency", "Capacity Building", 
-                           "Technology", "Just Transition", "Science", "AFOLU", 
-                           "Gender", "Compliance", "Bunkers", "Other/Uncertain")
-      
-      # Dynamically update Topic choices based on loaded data
+      # Update topics dynamically
       unique_topics <- unique(data$Topic)
-      
-      # Separate topics that match the preferred order and those that don’t
+      preferred_order <- c("Finance", "Mitigation", "Adaptation", "Loss and Damage", 
+                           "GST", "Art. 6", "Transparency", "Capacity Building", 
+                           "Technology", "Just Transition", "RM", "Science", 
+                           "AFOLU", "ACE", "Gender", "Compliance", "Bunkers")
       ordered_topics <- preferred_order[preferred_order %in% unique_topics]
-      remaining_topics <- sort(setdiff(unique_topics, preferred_order))
+      remaining_topics <- setdiff(unique_topics, preferred_order)
+      final_topics <- c("All", ordered_topics, remaining_topics, "Other/Uncertain")
+      final_topics <- unique(final_topics)
+      final_topics <- final_topics[!is.na(final_topics)]
       
-      # Combine preferred order, remaining topics, and "Other/Uncertain"
-      final_topics <- c("All", ordered_topics, remaining_topics)
-      
-      # Update the radio buttons with the final ordered topics
       updateRadioButtons(session, "selectedTopic", choices = final_topics, selected = "All")
     }
     
@@ -194,12 +192,18 @@ server <- function(input, output, session) {
     updateCheckboxGroupInput(session, "eventType", selected = character(0))
   })
   
+  # Watch for changes in the selected date
+  observeEvent(input$selectedDate, {
+    load_data(input$selectedDate)
+  })
+  
   # Go to today's date
   observeEvent(input$goToToday, {
     updateSelectInput(session, "selectedDate", selected = today_date)
     load_data(today_date)
   })
   
+  # Render filtered events
   output$filteredEvents <- renderDT({
     req(events_data())
     
@@ -213,9 +217,10 @@ server <- function(input, output, session) {
     filtered_data %>%
       select(-Date) %>%
       rename(`Event Type` = EventType) %>%
-      datatable(filter = "top", rownames = FALSE,
+      datatable(filter = "top", rownames = FALSE, 
                 options = list(pageLength = nrow(.), paging = FALSE), selection = "single")
   })
 }
+
 
 shinyApp(ui = ui, server = server)
